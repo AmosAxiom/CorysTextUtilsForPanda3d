@@ -11,13 +11,14 @@
 #Sorry for being a terrible python programmer.
 #-Cory
 
-__all__ = ['DirectGUISelectable']
+__all__ = ['DirectEntrySelectable', 'DirectLabelSelectable', 'orderedCombinations']
 
-from CorysTextUtils import TextMapper
+from CorysTextUtils import TextMapper, orderedCombinations
 from CorysTextUtils import Panda3dTextFormatUtils as TFU
 
 import math
 
+from direct.stdpy.threading import Lock as ThreadLock
 from panda3d.core import *
 from direct.showbase import ShowBaseGlobal
 from direct.gui import DirectGuiGlobals as DGG
@@ -42,20 +43,8 @@ class DirectEntrySelectable(DirectFrame):
 							"Mac", "St", "Te", "Ten", "Van", "Von", )
 	ForceCapNamePrefixes = ("D'", "DeLa", "Dell'", "L'", "M'", "Mc", "O'", )
 
-	sMoveKeyModifiers = ['shift', 'control', 'alt']
+	sMoveKeyModifiers = ['shift', 'control', 'alt', 'meta']
 	sMoveKeyEquivalents = ['arrow_left', 'arrow_right', 'home', 'end']
-
-	#Static utlity function to generate all combinations of an input list but 
-	#preserve the order in which the list items appear when combining.
-	#This is just to ensure all modifier keys are accepted within this function.
-	#And also I didn't want to import the combinatorics module
-	def orderedCombinations(inputList):
-		if len(inputList) == 0:
-			return [[]]
-		cs = []
-		for c in DirectEntrySelectable.orderedCombinations(inputList[:-1]):
-			cs += [c, c+[inputList[-1]]]
-		return cs
 
 	def __init__(self, parent = None, **kw):
 		# Inherits from DirectFrame
@@ -107,7 +96,7 @@ class DirectEntrySelectable(DirectFrame):
 			('autoCapitalizeForcePrefixes', DirectEntrySelectable.ForceCapNamePrefixes, None),
 			('selectable',		False,				None),
 			('textSelectionColor', (0,0,0,0.4),    self.setTextSelectionColor),
-			('textSelectionColorGrad', None, self.setTextSelectionColor)
+			('textSelectionColorGrad', None, self.setTextSelectionColor),
 			)
 		# Merge keyword options with default options
 		self.defineoptions(kw, optiondefs)
@@ -214,6 +203,10 @@ class DirectEntrySelectable(DirectFrame):
 		self.__textHilightNodePath.setTransparency(TransparencyAttrib.MAlpha)
 		self.__textHilightNodePath.hide()
 
+		self.guiItem.setPythonTag('textSelectionHandleObj', self)
+
+		self.__renderLock = ThreadLock()
+
 	def destroy(self):
 		self.ignoreAll()
 		self._autoCapListener.ignoreAll()
@@ -262,74 +255,121 @@ class DirectEntrySelectable(DirectFrame):
 
 	#updates the selection box
 	def render_selection(self):
+		with self.__renderLock:
+			#print(self.getSelectedText())
 
-		if self.__textSelectionStart == self.__textSelectionEnd:
-			self.__textHilightNodePath.hide()
-		else:
-			self.__textHilightNodePath.setScale(self['text_scale'][0], 1, self['text_scale'][1])
-			selsindex = self.__textSelectionStart
-			seleindex = self.__textSelectionEnd
+			if (self.__textSelectionStart == self.__textSelectionEnd 
+					or self.__textSelectionStart < 0
+					or self.__textSelectionStart < 0):
+				self.__textHilightNodePath.hide()
+			else:
+				self.__textHilightNodePath.setScale(self['text_scale'][0], 1, self['text_scale'][1])
+				selsindex = self.__textSelectionStart
+				seleindex = self.__textSelectionEnd
 
-			if self.__textSelectionEnd < self.__textSelectionStart:
-				seleindex = self.__textSelectionStart
-				selsindex = self.__textSelectionEnd
+				if self.__textSelectionEnd < self.__textSelectionStart:
+					seleindex = self.__textSelectionStart
+					selsindex = self.__textSelectionEnd
 
-			seltopcolor = (0,0,0,0.4)
-			selbotcolor = (0,0,0,0.4)
+				seltopcolor = (0,0,0,0.4)
+				selbotcolor = (0,0,0,0.4)
 
-			if (type(self['textSelectionColor']) is tuple) and (len(self['textSelectionColor']) == 4):
-				seltopcolor = self['textSelectionColor']
-				if (type(self['textSelectionColorGrad']) is tuple) and (len(self['textSelectionColorGrad']) == 4):
-					selbotcolor = self['textSelectionColorGrad']
-				else:
-					selbotcolor = self['textSelectionColor']
+				if (type(self['textSelectionColor']) is tuple) and (len(self['textSelectionColor']) == 4):
+					seltopcolor = (*self['textSelectionColor'][2:-5:-1],self['textSelectionColor'][3])
+					if (type(self['textSelectionColorGrad']) is tuple) and (len(self['textSelectionColorGrad']) == 4):
+						selbotcolor = (*self['textSelectionColorGrad'][2:-5:-1], self['textSelectionColorGrad'][3])
+					else:
+						selbotcolor = (*self['textSelectionColor'][2:-5:-1], self['textSelectionColor'][3])
 
-			selsrow = self.__textMapper.textAssembler.calcR(selsindex)
-			selerow = self.__textMapper.textAssembler.calcR(seleindex)
+				# print('selsindex', selsindex)
+				# print('seleindex', seleindex)
+				selsrow = self.__textMapper.textAssembler.calcR(selsindex)
+				selerow = self.__textMapper.textAssembler.calcR(seleindex)
 
-			txtUl = self.__textMapper.textAssembler.getUl()
-			txtLr = self.__textMapper.textAssembler.getLr()
+				#These sections correct when the character at the index is a newline, which
+				#results in the calculated row being -1.
+				#We scan adjacent characters to find what row it should actually represent.
+				snewlinedetected = False
+				snewlinebeginningoftext = False
+				if selsrow == -1:
+					snewlinedetected = True
+					selsoffset = 0
+					while selsrow == -1:
+						selsoffset = selsoffset-1
+						if selsindex+selsoffset <= 0:
+							selsrow = 0
+							snewlinebeginningoftext = True
+							break
+						selsrow = self.__textMapper.textAssembler.calcR(selsindex+selsoffset)
 
-			currgeom = self.__textHilightGeomNode.modifyGeom(0)
-			currvertexdata = GeomVertexData('textselverts', GeomVertexFormat.getV3c4(), Geom.UHStatic)
-			currprimitive = GeomTristrips(Geom.UHStatic)
+				enewlinedetected = False
+				enewlineendoftext = False
+				if selerow == -1:
+					enewlinedetected = True
+					seleoffset = 0
+					while selerow == -1:
+						seleoffset = seleoffset+1
+						if seleindex+seleoffset >= self.__textMapper.plaintextLength:
+							selerow = self.__textMapper.numRows-1
+							enewlineendoftext = True
+							break
+						selerow = self.__textMapper.textAssembler.calcR(seleindex+seleoffset)
 
-			currvertexdata.setNumRows((selerow-selsrow+1)*4)
+				txtUl = self.__textMapper.textAssembler.getUl()
+				txtLr = self.__textMapper.textAssembler.getLr()
 
-			selvertex = GeomVertexWriter(currvertexdata, 'vertex')
-			selcolor = GeomVertexWriter(currvertexdata, 'color')
+				currgeom = self.__textHilightGeomNode.modifyGeom(0)
+				currvertexdata = GeomVertexData('textselverts', GeomVertexFormat.getV3c4(), Geom.UHStatic)
+				currprimitive = GeomTristrips(Geom.UHStatic)
 
-			for cselrow in range(selsrow, selerow+1):
-				currtopY = txtUl.getY()
-				currbotY = txtLr.getY()
-				currleftX = txtUl.getX()
-				currrightX = txtLr.getX()
+				currvertexdata.setNumRows((selerow-selsrow+1)*4)
 
-				if cselrow < self.__textMapper.numRows:
-					currtopY = self.__textMapper.rowBounds[cselrow][0]
-					currbotY = self.__textMapper.rowBounds[cselrow][1]
+				selvertex = GeomVertexWriter(currvertexdata, 'vertex')
+				selcolor = GeomVertexWriter(currvertexdata, 'color')
 
-				if cselrow == selsrow:
-					currleftX = self.__textMapper.textAssembler.getXpos(cselrow, self.__textMapper.textAssembler.calcC(selsindex))
-				if cselrow == selerow:
-					currrightX = self.__textMapper.textAssembler.getXpos(cselrow, self.__textMapper.textAssembler.calcC(seleindex))
+				for cselrow in range(selsrow, selerow+1):
+					currtopY = txtUl.getY()
+					currbotY = txtLr.getY()
+					currleftX = txtUl.getX()
+					currrightX = txtLr.getX()
 
-				selvertex.setData3(currleftX, 0, currtopY)
-				selcolor.setData4(*seltopcolor)
-				selvertex.setData3(currleftX, 0, currbotY)
-				selcolor.setData4(*selbotcolor)
-				selvertex.setData3(currrightX, 0, currtopY)
-				selcolor.setData4(*seltopcolor)
-				selvertex.setData3(currrightX, 0, currbotY)
-				selcolor.setData4(*selbotcolor)
+					if cselrow < self.__textMapper.numRows:
+						currtopY = self.__textMapper.rowBounds[cselrow][0]
+						currbotY = self.__textMapper.rowBounds[cselrow][1]
 
-				currprimitive.add_next_vertices(4)
-				currprimitive.closePrimitive()
+					if cselrow == selsrow:
+						if snewlinedetected:
+							if snewlinebeginningoftext:
+								currleftX = txtUl.getX()
+							else:
+								currleftX = txtLr.getX()
+						else:
+							currleftX = self.__textMapper.textAssembler.getXpos(cselrow, self.__textMapper.textAssembler.calcC(selsindex))
+					if cselrow == selerow:
+						if enewlinedetected:
+							if enewlineendoftext:
+								currrightX = txtLr.getX()
+							else:
+								currrightX = txtUl.getX()
+						else:
+							currrightX = self.__textMapper.textAssembler.getXpos(cselrow, self.__textMapper.textAssembler.calcC(seleindex))
 
-			currgeom.clearPrimitives()
-			currgeom.setVertexData(currvertexdata)
-			currgeom.addPrimitive(currprimitive)
-			self.__textHilightNodePath.show()
+					selvertex.setData3(currleftX, 0, currtopY)
+					selcolor.setData4(*seltopcolor)
+					selvertex.setData3(currleftX, 0, currbotY)
+					selcolor.setData4(*selbotcolor)
+					selvertex.setData3(currrightX, 0, currtopY)
+					selcolor.setData4(*seltopcolor)
+					selvertex.setData3(currrightX, 0, currbotY)
+					selcolor.setData4(*selbotcolor)
+
+					currprimitive.add_next_vertices(4)
+					currprimitive.closePrimitive()
+
+				currgeom.clearPrimitives()
+				currgeom.setVertexData(currvertexdata)
+				currgeom.addPrimitive(currprimitive)
+				self.__textHilightNodePath.show()
 
 	# Takes either a tuple containing (start, end) or start, end as two separate arguments.
 	def setTextSelection(self, *args):
@@ -354,29 +394,52 @@ class DirectEntrySelectable(DirectFrame):
 
 		self.render_selection()
 
-	def __mousePollTask(self, task):
-		if base.mouseWatcherNode.hasMouse():
-			mpos = base.mouseWatcherNode.getMouse()
-			self.__mouseCoords = [mpos.x, mpos.y]
-
-			if task or self.__keysPressed['shift']:
-				self.__selectingText = True
-			self.__cursorToMouse()
-		if task:
-			return task.again
-
 
 	def getTextSelection(self):
 		return (self.__textSelectionStart, self.__textSelectionEnd)
 
+	# getSelectedText, removeSelectedText, and insertTextAtCursor
+	# are all functions intended to be used by some kind of copy paste
+	# manager or text engine.
 	def getSelectedText(self):
 		if self.__textSelectionStart < self.__textSelectionEnd :
 			return self.guiItem.getPlainText()[self.__textSelectionStart:self.__textSelectionEnd]
 		else :
 			return self.guiItem.getPlainText()[self.__textSelectionEnd:self.__textSelectionStart]
 
+	def removeSelectedText(self):
+		selbegin = self.__textSelectionStart
+		selend = self.__textSelectionEnd
+
+		if self.__textSelectionEnd < self.__textSelectionStart:
+			selbegin = self.__textSelectionEnd
+			selend = self.__textSelectionStart
+
+		self.set(TFU.formatPresRemove(self.get(), selbegin, selend))
+		self.guiItem.setCursorPosition(selbegin)
+		self.remove_selection()
+
+	def insertTextAtCursor(self, texttoinsert):
+		selbegin = self.__textSelectionStart
+		selend = self.__textSelectionEnd
+
+		if self.__textSelectionEnd < self.__textSelectionStart:
+			selbegin = self.__textSelectionEnd
+			selend = self.__textSelectionStart
+
+		newtext =''
+		if selbegin == selend:
+			newtext = TFU.formatPresInsert(self.get(), texttoinsert, selbegin)
+		else:
+			newtext = TFU.formatPresInsert(TFU.formatPresRemove(self.get(), selbegin, selend), texttoinsert, selbegin)
+
+		self.remove_selection()
+		self.set(newtext)
+		self.guiItem.setCursorPosition(selbegin+ len(TFU.toPlainText(texttoinsert)) )
+		self.__updateTextStats()
+
 	def __initCursorFollowMouse(self, *args):
-		print('started following mouse')
+		#print('started following mouse')
 		self.__updateTextStats()
 
 		self.__mousePollTask(None)
@@ -389,7 +452,7 @@ class DirectEntrySelectable(DirectFrame):
 		taskMgr.doMethodLater(0.05, self.__mousePollTask, self.guiItem.getId()+'-mousePoller')
 
 	def __stopCursorFollowMouse(self, *args):
-		print('stopped following mouse')
+		#print('stopped following mouse')
 		taskMgr.remove(self.guiItem.getId()+'-mousePoller')
 		self.__setKeyPressed('mouse1', False)
 
@@ -402,6 +465,17 @@ class DirectEntrySelectable(DirectFrame):
 		tmpmY = tmppoint.getZ()/self['text_scale'][1]
 
 		self.guiItem.setCursorPosition(self.__textMapper.xyToCursorIndex(tmpmX, tmpmY))
+
+	def __mousePollTask(self, task):
+		if base.mouseWatcherNode.hasMouse():
+			mpos = base.mouseWatcherNode.getMouse()
+			self.__mouseCoords = [mpos.x, mpos.y]
+
+			if task or self.__keysPressed['shift']:
+				self.__selectingText = True
+			self.__cursorToMouse()
+		if task:
+			return task.again
 
 	def __updateTextStats(self):
 		self.__textMapper.mapPGEntry(self.guiItem)
@@ -450,6 +524,21 @@ class DirectEntrySelectable(DirectFrame):
 		else:
 			self.guiItem.clearSound(DGG.ENTER + self.guiId)
 
+	def _upArrowFunc(self, press):
+		if press:
+			self.__updateTextStats()
+			self.__setKeyPressed('anymovekey', True)
+			self.setCursorPosition(self.__textMapper.pageIndex(self.getCursorPosition(), pageUp=True, numRows=1))
+		else:
+			self.__setKeyPressed('anymovekey', False)
+
+	def _downArrowFunc(self, press):
+		if press:
+			self.__updateTextStats()
+			self.__setKeyPressed('anymovekey', True)
+			self.setCursorPosition(self.__textMapper.pageIndex(self.getCursorPosition(), pageUp=False, numRows=1))
+		else:
+			self.__setKeyPressed('anymovekey', False)
 
 	def setClickSound(self):
 		clickSound = self['clickSound']
@@ -491,7 +580,7 @@ class DirectEntrySelectable(DirectFrame):
 			self.accept('shift', self.__setKeyPressed, ['shift', True])
 			self.accept('shift-up', self.__setKeyPressed, ['shift', False])
 			
-			for modcombo in DirectEntrySelectable.orderedCombinations(DirectEntrySelectable.sMoveKeyModifiers):
+			for modcombo in orderedCombinations(DirectEntrySelectable.sMoveKeyModifiers):
 				currmodcombostr = '-'.join(modcombo)
 
 				if currmodcombostr != '':
@@ -501,6 +590,14 @@ class DirectEntrySelectable(DirectFrame):
 					self.accept(currmodcombostr+tmpkeq, self.__setKeyPressed, ['anymovekey', True])
 					self.accept(currmodcombostr+tmpkeq+'-repeat', self.__setKeyPressed, ['anymovekey', True])
 					self.accept(currmodcombostr+tmpkeq+'-up', self.__setKeyPressed, ['anymovekey', False])
+
+				self.accept(currmodcombostr+'arrow_up', self._upArrowFunc, [True])
+				self.accept(currmodcombostr+'arrow_up-repeat', self._upArrowFunc, [True])
+				self.accept(currmodcombostr+'arrow_up-up', self._upArrowFunc, [False])
+
+				self.accept(currmodcombostr+'arrow_down', self._downArrowFunc, [True])
+				self.accept(currmodcombostr+'arrow_down-repeat', self._downArrowFunc, [True])
+				self.accept(currmodcombostr+'arrow_down-up', self._downArrowFunc, [False])
 
 				self.accept(currmodcombostr+'backspace', self.__setKeyPressed, ['backspace', True])
 				self.accept(currmodcombostr+'backspace-repeat', self.__setKeyPressed, ['backspace', True])
@@ -527,9 +624,9 @@ class DirectEntrySelectable(DirectFrame):
 			if self['autoCapitalize']:
 				self._autoCapitalize()
 
-			self.__updateTextStats()
 			self.__selectingText = False
 		self.__prevText = self.guiItem.getText()
+		self.__updateTextStats()
 
 	def _handleErasing(self, guiEvent):
 		if self.__textSelectionStart != self.__textSelectionEnd:
@@ -544,10 +641,10 @@ class DirectEntrySelectable(DirectFrame):
 		if self['autoCapitalize']:
 			self._autoCapitalize()
 
-		self.__updateTextStats()
 		self.__selectingText = False
 
 		self.__prevText = self.guiItem.getText()
+		self.__updateTextStats()
 
 	def _autoCapitalize(self):
 		name = self.guiItem.getWtext()
@@ -602,7 +699,7 @@ class DirectEntrySelectable(DirectFrame):
 		self.ignore('shift')
 		self.ignore('shift-up')
 
-		for modcombo in DirectEntrySelectable.orderedCombinations(DirectEntrySelectable.sMoveKeyModifiers):
+		for modcombo in orderedCombinations(DirectEntrySelectable.sMoveKeyModifiers):
 			currmodcombostr = '-'.join(modcombo)
 
 			if currmodcombostr != '':
@@ -612,6 +709,14 @@ class DirectEntrySelectable(DirectFrame):
 				self.ignore(currmodcombostr+tmpkeq)
 				self.ignore(currmodcombostr+tmpkeq+'-repeat')
 				self.ignore(currmodcombostr+tmpkeq+'-up')
+
+			self.ignore(currmodcombostr+'arrow_up')
+			self.ignore(currmodcombostr+'arrow_up-repeat')
+			self.ignore(currmodcombostr+'arrow_up-up')
+
+			self.ignore(currmodcombostr+'arrow_down')
+			self.ignore(currmodcombostr+'arrow_down-repeat')
+			self.ignore(currmodcombostr+'arrow_down-up')
 
 			self.ignore(currmodcombostr+'backspace')
 			self.ignore(currmodcombostr+'backspace-repeat')
@@ -749,40 +854,438 @@ class DirectEntrySelectable(DirectFrame):
 					   self.ur[2] + pad[1] + borderWidth[1]]
 		return self.bounds
 
+
+###
+##
+#
+#
+##
+###
+
+
+
 class DirectLabelSelectable(DirectFrame):
-    """
-    DirectLabel(parent) - Create a DirectGuiWidget which has multiple
-    states.  User explicitly chooses a state to display
-    """
+	"""
+	DirectLabel(parent) - Create a DirectGuiWidget which has multiple
+	states.  User explicitly chooses a state to display
+	"""
 
-    def __init__(self, parent = None, **kw):
-        # Inherits from DirectFrame
-        # A Direct Frame can have:
-        # - A background texture (pass in path to image, or Texture Card)
-        # - A midground geometry item (pass in geometry)
-        # - A foreground text Node (pass in text string or Onscreen Text)
-        # For a direct label:
-        # Each label has 1 or more states
-        # The same image/geom/text can be used for all states or each
-        # state can have a different text/geom/image
-        # State transitions happen under user control
+	sMoveKeyModifiers = ['shift', 'control', 'alt', 'meta']
+	sMoveKeyEquivalents = ['arrow_left', 'arrow_right', 'arrow_up', 'arrow_down', 'page_up', 'page_down', 'home', 'end']
 
-        optiondefs = (
-            # Define type of DirectGuiWidget
-            ('pgFunc',          PGItem,    None),
-            ('numStates',       1,         None),
-            ('state',           self.inactiveInitState, None),
-            ('activeState',     0,         self.setActiveState),
-        )
-        # Merge keyword options with default options
-        self.defineoptions(kw, optiondefs)
+	def __init__(self, parent = None, **kw):
+		# Inherits from DirectFrame
+		# A Direct Frame can have:
+		# - A background texture (pass in path to image, or Texture Card)
+		# - A midground geometry item (pass in geometry)
+		# - A foreground text Node (pass in text string or Onscreen Text)
+		# For a direct label:
+		# Each label has 1 or more states
+		# The same image/geom/text can be used for all states or each
+		# state can have a different text/geom/image
+		# State transitions happen under user control
 
-        # Initialize superclasses
-        DirectFrame.__init__(self, parent)
+		optiondefs = (
+			# Define type of DirectGuiWidget
+			('pgFunc',		  PGEntry,	None),
+			('numStates',	   2,		 None),
+			('text',	 '',  self.setText),
+			('state',		   self.inactiveInitState, None),
+			('activeState',	 0,		 self.setActiveState),
+			('focus',		   0,		 self.setFocus),
+			('textSelectionColor', (0,0,0,0.4),    self.setTextSelectionColor),
+			('textSelectionColorGrad', None, self.setTextSelectionColor)
+			)
+		# Merge keyword options with default options
+		self.defineoptions(kw, optiondefs)
 
-        # Call option initialization functions
-        self.initialiseoptions(DirectLabelSelectable)
+		# Initialize superclasses
+		DirectFrame.__init__(self, parent)
 
-    def setActiveState(self):
-        """ setActiveState - change label to specifed state """
-        self.guiItem.setState(self['activeState'])
+		self.__textMapper = TextMapper(self.guiItem.getTextNode())
+
+		#This serves a different purpose than the DirectENtrySelectable.
+		#I have to make the guiItem a PGEntry because otherwise it doesnt
+		#retain focus sensibly
+		#however, I need to make sure any typed text is hidden.
+		#so I just pulled out all the stops to make sure it's totally
+		#invisible.
+		self.onscreenText = OnscreenText(parent = ShowBaseGlobal.hidden,
+			text = '',
+			align = TextNode.ALeft,
+			fg = (0,0,0,0),
+			bg = (0,0,0,0),
+			scale = 0.0001,
+			# Don't get rid of the text node
+			mayChange = False)
+
+		# We can get rid of the node path since we're just using the
+		# onscreenText as an easy way to access a text node as a
+		self.onscreenText.removeNode()
+
+		self.accept(self.guiItem.getFocusInEvent(), self.focusInCommandFunc)
+		self.accept(self.guiItem.getFocusOutEvent(), self.focusOutCommandFunc)
+		self.accept('press-mouse1-'+self.guiItem.getId(), self.__mousePressFunction)
+		self.accept('release-mouse1-'+self.guiItem.getId(), self.__mouseReleaseFunction)
+
+		# Call option initialization functions
+		self.initialiseoptions(DirectLabelSelectable)
+
+		# Update TextNodes for the focus state (which should make the PGEntry text invisible)
+		self.guiItem.setTextDef(0, self.onscreenText.textNode)
+		self.guiItem.setTextDef(1, self.onscreenText.textNode)
+
+		# limit the amount of stuff that can be typed in to the dummy pgentry
+		# even though it's not visible I don't want it present or stored in mem
+		self.guiItem.setAcceptEnabled(False)
+		self.guiItem.clearCursorDef()
+		self.guiItem.setMaxChars(1)
+		self.guiItem.setMaxWidth(0.0000152587890625) #can't set this to 0 or it is interpreted as unlimited width so I guess I'll set it to 2^-16 lol
+		self.guiItem.setNumLines(1)
+
+		# Initialize the selecting variables to tell if the user is trying to hilight text
+		self.__selectingText = False
+		self.__textSelectionStart = -1
+		self.__textSelectionEnd = -1
+
+		self.__keysPressed = {
+			'shift': False,
+			'arrow_left': False,
+			'arrow_right': False,
+			'arrow_up': False,
+			'arrow_down': False,
+			'page_up': False,
+			'page_down': False,
+			'home': False,
+			'end': False
+		}
+		self.__mouseCoords = [0,0]
+
+		vdata = GeomVertexData('testvertexdata', GeomVertexFormat.getV3c4(), Geom.UHStatic)
+		vdata.setNumRows(4)
+
+		vertices = GeomVertexWriter(vdata, 'vertex')
+		colors = GeomVertexWriter(vdata, 'color')
+
+		vertices.addData3(0,0,0.1)
+		colors.addData4(*self['textSelectionColor'])
+		vertices.addData3(0,0,0)
+		colors.addData4(0,0.5,0,0.5)
+		vertices.addData3(0.1,0,0.1)
+		colors.addData4(*self['textSelectionColor'])
+		vertices.addData3(0.1,0,0)
+		colors.addData4(0,0.5,0,0.5)
+
+		primitive = GeomTristrips(Geom.UHStatic)
+		primitive.add_next_vertices(4)
+		primitive.closePrimitive()
+
+		tmpgeom = Geom(vdata)
+		tmpgeom.addPrimitive(primitive)
+
+		self.__textHilightGeomNode = GeomNode(self.guiItem.getId()+'-textHilight')
+		self.__textHilightGeomNode.addGeom(tmpgeom)
+
+		self.__textHilightNodePath = self.attachNewNode(self.__textHilightGeomNode, 100)
+		self.__textHilightNodePath.setTransparency(TransparencyAttrib.MAlpha)
+		self.__textHilightNodePath.hide()
+
+		self.guiItem.setActive(True)
+
+		self.guiItem.setPythonTag('textSelectionHandleObj', self)
+
+		self.__renderLock = ThreadLock()
+
+
+	def __setKeyPressed(self, keyName, newVal):
+		if keyName in self.__keysPressed.keys():
+			if newVal != self.__keysPressed[keyName]:
+				self.__keysPressed[keyName] = newVal
+
+			if newVal:
+				if self.__keysPressed['shift']:
+					if keyName == 'arrow_left':
+						if self.__textSelectionEnd > 0:
+							self.__textSelectionEnd -= 1
+					elif keyName == 'arrow_right':
+						if self.__textSelectionEnd < self.__textMapper.plaintextLength:
+							self.__textSelectionEnd += 1
+					elif keyName == 'arrow_up':
+						self.__textSelectionEnd = self.__textMapper.pageIndex(self.__textSelectionEnd, pageUp=True, numRows=1)
+					elif keyName == 'arrow_down':
+						self.__textSelectionEnd = self.__textMapper.pageIndex(self.__textSelectionEnd, pageUp=False, numRows=1)
+					elif keyName == 'page_up':
+						self.__textSelectionEnd = self.__textMapper.pageIndex(self.__textSelectionEnd, pageUp=True)
+					elif keyName == 'page_down':
+						self.__textSelectionEnd = self.__textMapper.pageIndex(self.__textSelectionEnd, pageUp=False)
+					elif keyName == 'home':
+						tmperow = self.__textMapper.textAssembler.calcR(self.__textSelectionEnd)
+						self.__textSelectionEnd = self.__textMapper.textAssembler.calcIndex(tmperow, 0)
+					elif keyName == 'end':
+						tmperow = self.__textMapper.textAssembler.calcR(self.__textSelectionEnd)
+						self.__textSelectionEnd = self.__textMapper.textAssembler.calcIndex(tmperow, self.__textMapper.charsPerRow[tmperow])
+
+					self.render_selection()
+				else:
+					if ( keyName != 'shift'):
+						self.remove_selection()
+
+		# print(keyName, newVal)
+
+	def __mousePressFunction(self, *args):
+		if not self['focus']:
+			self['focus'] = True
+
+		self.__mousePollTask(None)
+
+		if not self.__keysPressed['shift']:
+			self.__textSelectionStart = self.__cursorToMouse()
+		self.__textSelectionEnd = self.__cursorToMouse()
+
+		self.render_selection()
+
+		taskMgr.doMethodLater(0.05, self.__mousePollTask, self.guiItem.getId()+'-mousePoller')
+
+
+	def __mouseReleaseFunction(self, *args):
+		taskMgr.remove(self.guiItem.getId()+'-mousePoller')
+
+	def __mousePollTask(self, task):
+		if base.mouseWatcherNode.hasMouse():
+			mpos = base.mouseWatcherNode.getMouse()
+			self.__mouseCoords = [mpos.x, mpos.y]
+
+			self.__textSelectionEnd = self.__cursorToMouse()
+
+			self.render_selection()
+		if task:
+			return task.again
+
+	def setTextSelectionColor(self):
+		canrendersel = False
+		try:
+			if self.__textHilightGeomNode:
+				canrendersel = True
+		except AttributeError:
+			canrendersel = False
+		else:
+			self.render_selection()
+
+	def setText(self):
+		DirectFrame.setText(self)
+		self.__updateTextStats()
+
+	def __updateTextStats(self):
+		otxtcomponent = self.component('text0')
+
+		newprops = TextProperties(otxtcomponent.textNode)
+		newprops.setFont(self['text_font'])
+		newprops.setWordwrap(self['text_wordwrap'])
+
+		# newprops.setAlign(otxtcomponent.align)
+		# newprops.setDirection(otxtcomponent.direction) #I need to update my panda3d before uncommenting this
+		self.__textMapper.setProperties(newprops)
+		self.__textMapper.setWtext(otxtcomponent.text)
+
+		txtUl = self.__textMapper.textAssembler.getUl()
+		txtLr = self.__textMapper.textAssembler.getLr()
+
+		self['frameSize'] = (txtUl.getX()*otxtcomponent.scale[0],
+								txtLr.getX()*otxtcomponent.scale[0],
+								txtLr.getY()*otxtcomponent.scale[1],
+								txtUl.getY()*otxtcomponent.scale[1])
+		# self.guiItem.setFrame(txtUl.getX()*otxtcomponent.scale[0],
+		# 						txtLr.getX()*otxtcomponent.scale[0],
+		# 						txtLr.getY()*otxtcomponent.scale[1],
+		# 						txtUl.getY()*otxtcomponent.scale[1])
+
+		# print('frame', self.guiItem.getId(), self.guiItem.getFrame())
+		# print('active test 1', self.guiItem.getActive())
+
+		# fstest = PGFrameStyle()
+		# fstest.setColor(0,0,1,1)
+		# fstest.setType(PGFrameStyle.T_bevel_out)
+		# fstest.setWidth(1,1)
+		# self.guiItem.setFrameStyle(0, fstest)
+
+		# print('guiitem state:', self.guiItem.getState())
+
+	def setActiveState(self):
+		""" setActiveState - change label to specifed state """
+		self.guiItem.setState(self['activeState'])
+
+	def setFocus(self):
+		PGEntry.setFocus(self.guiItem, self['focus'])
+
+	def focusInCommandFunc(self):
+		#print('focus in function')
+		self.accept('shift', self.__setKeyPressed, ['shift', True])
+		self.accept('shift-up', self.__setKeyPressed, ['shift', False])
+		
+		for modcombo in orderedCombinations(DirectLabelSelectable.sMoveKeyModifiers):
+			currmodcombostr = '-'.join(modcombo)
+
+			if currmodcombostr != '':
+				currmodcombostr += '-'
+
+			for tmpkeq in DirectLabelSelectable.sMoveKeyEquivalents:
+				self.accept(currmodcombostr+tmpkeq, self.__setKeyPressed, [tmpkeq, True])
+				self.accept(currmodcombostr+tmpkeq+'-repeat', self.__setKeyPressed, [tmpkeq, True])
+				self.accept(currmodcombostr+tmpkeq+'-up', self.__setKeyPressed, [tmpkeq, False])
+
+	def focusOutCommandFunc(self):
+		#print('focus out function')
+		self.ignore('shift')
+		self.ignore('shift-up')
+
+		for modcombo in orderedCombinations(DirectLabelSelectable.sMoveKeyModifiers):
+			currmodcombostr = '-'.join(modcombo)
+
+			if currmodcombostr != '':
+				currmodcombostr += '-'
+
+			for tmpkeq in DirectLabelSelectable.sMoveKeyEquivalents:
+				self.ignore(currmodcombostr+tmpkeq)
+				self.ignore(currmodcombostr+tmpkeq+'-repeat')
+				self.ignore(currmodcombostr+tmpkeq+'-up')
+
+		self.remove_selection()
+		self.__selectingText = False
+
+	def remove_selection(self):
+		self.__textSelectionStart = -1
+		self.__textSelectionEnd = -1
+
+		self.render_selection()
+
+
+	def __cursorToMouse(self):
+		mat = self.getMat(render2d)
+		mat.invertInPlace()
+		tmppoint = mat.xformPoint(Point3.rfu(self.__mouseCoords[0], 0.0, self.__mouseCoords[1]))
+
+		tmpmX = tmppoint.getX()/self['text_scale'][0]
+		tmpmY = tmppoint.getZ()/self['text_scale'][1]
+
+		return self.__textMapper.xyToCursorIndex(tmpmX, tmpmY)
+
+	def getSelectedText(self):
+		if self.__textSelectionStart < self.__textSelectionEnd :
+			return self.__textMapper.textAssembler.getPlainWtext()[self.__textSelectionStart:self.__textSelectionEnd]
+		else :
+			return self.__textMapper.textAssembler.getPlainWtext()[self.__textSelectionEnd:self.__textSelectionStart]
+
+	def render_selection(self):
+		with self.__renderLock:
+			#print(self.getSelectedText())
+
+			if (self.__textSelectionStart == self.__textSelectionEnd 
+					or self.__textSelectionStart < 0
+					or self.__textSelectionStart < 0):
+				self.__textHilightNodePath.hide()
+			else:
+				self.__textHilightNodePath.setScale(self['text_scale'][0], 1, self['text_scale'][1])
+				selsindex = self.__textSelectionStart
+				seleindex = self.__textSelectionEnd
+
+				if self.__textSelectionEnd < self.__textSelectionStart:
+					seleindex = self.__textSelectionStart
+					selsindex = self.__textSelectionEnd
+
+				seltopcolor = (0,0,0,0.4)
+				selbotcolor = (0,0,0,0.4)
+
+				if (type(self['textSelectionColor']) is tuple) and (len(self['textSelectionColor']) == 4):
+					seltopcolor = (*self['textSelectionColor'][2:-5:-1],self['textSelectionColor'][3])
+					if (type(self['textSelectionColorGrad']) is tuple) and (len(self['textSelectionColorGrad']) == 4):
+						selbotcolor = (*self['textSelectionColorGrad'][2:-5:-1], self['textSelectionColorGrad'][3])
+					else:
+						selbotcolor = (*self['textSelectionColor'][2:-5:-1], self['textSelectionColor'][3])
+
+				selsrow = self.__textMapper.textAssembler.calcR(selsindex)
+				selerow = self.__textMapper.textAssembler.calcR(seleindex)
+
+				#These sections correct when the character at the index is a newline, which
+				#results in the calculated row being -1.
+				#We scan adjacent characters to find what row it should actually represent.
+				snewlinedetected = False
+				snewlinebeginningoftext = False
+				if selsrow == -1:
+					snewlinedetected = True
+					selsoffset = 0
+					while selsrow == -1:
+						selsoffset = selsoffset-1
+						if selsindex+selsoffset <= 0:
+							selsrow = 0
+							snewlinebeginningoftext = True
+							break
+						selsrow = self.__textMapper.textAssembler.calcR(selsindex+selsoffset)
+
+				enewlinedetected = False
+				enewlineendoftext = False
+				if selerow == -1:
+					enewlinedetected = True
+					seleoffset = 0
+					while selerow == -1:
+						seleoffset = seleoffset+1
+						if seleindex+seleoffset >= self.__textMapper.plaintextLength:
+							selerow = self.__textMapper.numRows-1
+							enewlineendoftext = True
+							break
+						selerow = self.__textMapper.textAssembler.calcR(seleindex+seleoffset)
+
+				txtUl = self.__textMapper.textAssembler.getUl()
+				txtLr = self.__textMapper.textAssembler.getLr()
+
+				currgeom = self.__textHilightGeomNode.modifyGeom(0)
+				currvertexdata = GeomVertexData('textselverts', GeomVertexFormat.getV3c4(), Geom.UHStatic)
+				currprimitive = GeomTristrips(Geom.UHStatic)
+
+				currvertexdata.setNumRows((selerow-selsrow+1)*4)
+
+				selvertex = GeomVertexWriter(currvertexdata, 'vertex')
+				selcolor = GeomVertexWriter(currvertexdata, 'color')
+
+				for cselrow in range(selsrow, selerow+1):
+					currtopY = txtUl.getY()
+					currbotY = txtLr.getY()
+					currleftX = txtUl.getX()
+					currrightX = txtLr.getX()
+
+					if cselrow < self.__textMapper.numRows:
+						currtopY = self.__textMapper.rowBounds[cselrow][0]
+						currbotY = self.__textMapper.rowBounds[cselrow][1]
+
+					if cselrow == selsrow:
+						if snewlinedetected:
+							if snewlinebeginningoftext:
+								currleftX = txtUl.getX()
+							else:
+								currleftX = txtLr.getX()
+						else:
+							currleftX = self.__textMapper.textAssembler.getXpos(cselrow, self.__textMapper.textAssembler.calcC(selsindex))
+					if cselrow == selerow:
+						if enewlinedetected:
+							if enewlineendoftext:
+								currrightX = txtLr.getX()
+							else:
+								currrightX = txtUl.getX()
+						else:
+							currrightX = self.__textMapper.textAssembler.getXpos(cselrow, self.__textMapper.textAssembler.calcC(seleindex))
+
+					selvertex.setData3(currleftX, 0, currtopY)
+					selcolor.setData4(*seltopcolor)
+					selvertex.setData3(currleftX, 0, currbotY)
+					selcolor.setData4(*selbotcolor)
+					selvertex.setData3(currrightX, 0, currtopY)
+					selcolor.setData4(*seltopcolor)
+					selvertex.setData3(currrightX, 0, currbotY)
+					selcolor.setData4(*selbotcolor)
+
+					currprimitive.add_next_vertices(4)
+					currprimitive.closePrimitive()
+
+				currgeom.clearPrimitives()
+				currgeom.setVertexData(currvertexdata)
+				currgeom.addPrimitive(currprimitive)
+				self.__textHilightNodePath.show()

@@ -19,6 +19,19 @@ import math
 from panda3d.core import *
 import encodings.utf_8
 
+
+#Static utlity function to generate all combinations of an input list but 
+#preserve the order in which the list items appear when combining.
+#This is just to ensure all modifier keys are accepted within this function.
+#And also I didn't want to import the combinatorics module
+def orderedCombinations(inputList):
+	if len(inputList) == 0:
+		return [[]]
+	cs = []
+	for c in orderedCombinations(inputList[:-1]):
+		cs += [c, c+[inputList[-1]]]
+	return cs
+
 #A collection of formatting utility functions I find useful
 #for working with text in panda3d containing formatting
 # characters
@@ -211,7 +224,7 @@ class Panda3dTextFormatUtils:
 					raise IndexError('insert index is outside the bounds of the total length of the plaintext')
 
 		indexsofar = 0
-		chunkIndex = 0
+		chunkIndex = len(plaintextChunks)
 		inchunkIndex = 0
 
 		for ptcind in range(len(plaintextChunks)):
@@ -233,13 +246,6 @@ class Panda3dTextFormatUtils:
 			if currmod[0] == '\1':
 				invpremods.append('\2')
 
-		insertmods = Panda3dTextFormatUtils.pareFormatChunks(insertfmtChunks)
-		invinsertmods = []
-
-		for currmod in insertmods:
-			if currmod[0] == '\1':
-				invinsertmods.append('\2')
-
 		#revise format chunks inside insert text to remove any redundant \2's
 		num1s = 0
 		for trindex in range(len(insertfmtChunks)):
@@ -252,20 +258,104 @@ class Panda3dTextFormatUtils:
 		retval = ''
 		for cindex in range(chunkIndex):
 			retval += plaintextChunks[cindex]
-			retval += formatChunks[cindex]
+			if cindex < len(formatChunks):
+				retval += formatChunks[cindex]
 
-		retval += plaintextChunks[chunkIndex][:inchunkIndex]
+		if chunkIndex < len(plaintextChunks):
+			retval += plaintextChunks[chunkIndex][:inchunkIndex]
 
 		retval += ''.join(invpremods)
 		retval += insertStr
-		retval += ''.join(invinsertmods)
-		retval += ''.join(premods)
 
-		retval += plaintextChunks[chunkIndex][inchunkIndex:]
+		if chunkIndex < len(plaintextChunks):
+			insertmods = Panda3dTextFormatUtils.pareFormatChunks(insertfmtChunks)
+			invinsertmods = []
 
-		for cindex in range(chunkIndex+1,len(plaintextChunks)):
-			retval += plaintextChunks[cindex]
-			retval += formatChunks[cindex]
+			for currmod in insertmods:
+				if currmod[0] == '\1':
+					invinsertmods.append('\2')
+
+			retval += ''.join(invinsertmods)
+			retval += ''.join(premods)
+			retval += plaintextChunks[chunkIndex][inchunkIndex:]
+
+			for cindex in range(chunkIndex+1,len(plaintextChunks)):
+				retval += plaintextChunks[cindex]
+				retval += formatChunks[cindex]
+
+		return retval
+
+	def formatPresSubstr(inputStr, startIndex, endIndex, ignoreOutOfBounds=False):
+		(plaintextChunks, formatChunks) = Panda3dTextFormatUtils.chunkTextAndFormatting(inputStr)
+
+		revSindex = startIndex
+		revEindex = endIndex
+
+		totalPlaintextLength = len(''.join(plaintextChunks))
+
+		if startIndex > totalPlaintextLength:
+			if ignoreOutOfBounds:
+				revSindex = totalPlaintextLength
+			else:
+				raise IndexError('start index is outside the bounds of the total length of the plaintext')
+		if endIndex > totalPlaintextLength:
+			if ignoreOutOfBounds:
+				revEindex = totalPlaintextLength
+			else:
+				raise IndexError('end index is outside the bounds of the total length of the plaintext')
+
+		if startIndex < 0:
+			revSindex = totalPlaintextLength-startIndex
+			if -startIndex > totalPlaintextLength:
+				if ignoreOutOfBounds:
+					revSindex = 0
+				else:
+					raise IndexError('start index is outside the bounds of the total length of the plaintext')
+		if endIndex < 0:
+			revEindex = totalPlaintextLength-endIndex
+			if -endIndex > totalPlaintextLength:
+				if ignoreOutOfBounds:
+					revEindex = 0
+				else:
+					raise IndexError('end index is outside the bounds of the total length of the plaintext')
+
+		finSindex = revSindex
+		finEindex = revEindex
+
+		if revEindex < revSindex:
+			finSindex = revEindex
+			finEindex = revSindex
+
+		indexsofar = 0
+		chunkIndices = [0, 0]
+		inchunkIndices = [0, 0]
+
+		for ptcind in range(len(plaintextChunks)):
+			if indexsofar <= finSindex < indexsofar+len(plaintextChunks[ptcind]):
+				chunkIndices[0] = ptcind
+				inchunkIndices[0] = finSindex-indexsofar
+			if indexsofar < finEindex <= indexsofar+len(plaintextChunks[ptcind]):
+				chunkIndices[1] = ptcind
+				inchunkIndices[1] = finEindex-indexsofar
+
+			indexsofar += len(plaintextChunks[ptcind])
+
+		premods = Panda3dTextFormatUtils.pareFormatChunks(formatChunks[:chunkIndices[0]])
+
+		while len(premods)>=1 and premods[0] == '\2':
+			del premods[0]
+
+		retval = ''.join(premods)
+		if chunkIndices[0] == chunkIndices[1]:
+			retval += plaintextChunks[chunkIndices[0]][inchunkIndices[0]:inchunkIndices[1]]
+		else:
+			for ptcind in range(chunkIndices[0], chunkIndices[1]+1):
+				if ptcind == chunkIndices[0]:
+					retval += plaintextChunks[chunkIndices[0]][inchunkIndices[0]:]+formatChunks[ptcind]
+				elif ptcind == chunkIndices[1]:
+					retval += plaintextChunks[chunkIndices[1]][:inchunkIndices[1]]
+				else:
+					retval += plaintextChunks[ptcind]+formatChunks[ptcind]
 
 		return retval
 
@@ -380,7 +470,11 @@ class TextMapper:
 		self.rowBounds = [] # (top, bottom)
 		for trindex in range(self.numRows):
 			if hasFormatting:
-				currLineHeight = self.textAssembler.getProperties(trindex, 0).getFont().getLineHeight()
+				currLineHeight = 0
+				try:
+					currLineHeight = self.textAssembler.getProperties(trindex, 0).getFont().getLineHeight()
+				except (AssertionError):
+					pass
 
 				for crcindex in range(1, self.charsPerRow[trindex]):
 					testLHeight = self.textAssembler.getProperties(trindex, crcindex).getFont().getLineHeight()
@@ -442,7 +536,8 @@ class TextMapper:
 
 		return (testr, testc)
 
-	#The character index under the XY position represented.
+	#The character index under the XY position represented
+	# i.e. if the user clicks, what character they would click on.
 	#THIS IS DIFFERENT from the text cursor xy of the character which sits
 	# to the left of the character!
 	# returns -1 if the XY is not over a character.
@@ -453,3 +548,106 @@ class TextMapper:
 			return -1
 
 		return self.textAssembler.calcIndex(*temprc)
+
+	#When supplied a row and a column, finds the column in the
+	# target row corresponding to the horizontally closest
+	#cursor position
+	def closestHorizCol(self, row, column, targetRow):
+		if targetRow < 0 or targetRow >= self.numRows:
+			raise IndexError('Target row is not within the bounds of the text.')
+
+		if row < 0 or row >= self.numRows:
+			raise IndexError('Initial row is not within the bounds of the text')
+
+		if column < 0 or column > self.charsPerRow[row]:
+			raise IndexError('Initial column is not within the bounds of the text')
+
+		targetX = self.textAssembler.getXpos(row, column)
+		retcol = 0
+		prevbest = abs(self.textAssembler.getXpos(targetRow, 0)-targetX)
+
+		for tstcol in range(1, self.charsPerRow[targetRow]):
+			newtest = abs(self.textAssembler.getXpos(targetRow, tstcol)-targetX)
+			if newtest < prevbest:
+				prevbest = newtest
+				retcol = tstcol
+
+		return retcol
+
+	#When supplied a target row,
+	# finds the index of the character at the
+	# target row which is horizontally closest to the index supplied
+	def indexAtClosestColumn(self, index, targetRow):
+		row = self.textAssembler.calcR(index)
+		col = self.textAssembler.calcC(index)
+
+		if row == -1:
+			rindexoffset = 0
+			while row == -1:
+				rindexoffset = rindexoffset+1
+				if index+rindexoffset >= self.plaintextLength:
+					row = self.numRows-1
+					col = self.charsPerRow[row]
+					break
+				row = self.textAssembler.calcR(index+rindexoffset)
+				col = self.textAssembler.calcC(index+rindexoffset)
+
+		newrow = row
+		newcol = col
+
+		if col == self.charsPerRow[row]:
+			newrow = row+1
+			if newrow >= self.numRows:
+				newrow = self.numRows-1
+				newcol = self.charsPerRow[newrow]
+			else:
+				newcol = 0
+
+		return self.textAssembler.calcIndex(targetRow, self.closestHorizCol(newrow, newcol, targetRow))
+
+	def pageIndex(self, index, pageUp=True, numRows=8):
+		if numRows == 0:
+			return index
+
+		row = self.textAssembler.calcR(index)
+		col = self.textAssembler.calcC(index)
+
+		if row == -1:
+			rindexoffset = 0
+			while row == -1:
+				rindexoffset = rindexoffset+1
+				if index+rindexoffset >= self.plaintextLength:
+					row = self.numRows-1
+					col = self.charsPerRow[row]
+					break
+				row = self.textAssembler.calcR(index+rindexoffset)
+				col = self.textAssembler.calcC(index+rindexoffset)
+
+		newrow = row
+		newcol = col
+
+		if col == self.charsPerRow[row]:
+			newrow = row+1
+			if newrow >= self.numRows:
+				newrow = self.numRows-1
+				newcol = self.charsPerRow[newrow]
+			else:
+				newcol = 0
+
+		pagedrow = newrow
+		if pageUp:
+			if newrow == 0:
+				return 0
+			pagedrow -= numRows
+		else:
+			if newrow == self.numRows-1:
+				return self.plaintextLength
+			pagedrow += numRows
+
+		if pagedrow >= self.numRows:
+			pagedrow = self.numRows-1
+		if pagedrow < 0:
+			pagedrow = 0
+
+		return self.textAssembler.calcIndex(pagedrow, self.closestHorizCol(newrow, newcol, pagedrow))
+
