@@ -25,7 +25,7 @@ selectable= True
 ```
 to the kwargs of the constructor.
 
-Useful parameters to know:
+Useful kwargs parameters to know:
 * selectable - Setting selectable=True will make this DirectEntrySelectable render a selection box and behave sensibly with selected text.
 * textSelectionColor - The color of the text selection hilight as a 4-tuple. I would recommend a transparency between 0.3 and 0.7.
 * textSelectionColorGrad - If this is defined- the bottom of each line of the text hilight will be this color, and the top color will be textSelectionColor
@@ -33,7 +33,7 @@ Useful parameters to know:
 ## DirectLabelSelectable
 A version of directlabel which allows text selection- in case you want to display text you want to allow the user to hilight and copy from.
 
-Useful parameters to know:
+Useful kwargs parameters to know:
 * textSelectionColor - The color of the text selection hilight as a 4-tuple. I would recommend a transparency between 0.3 and 0.7.
 * textSelectionColorGrad - If this is defined- the bottom of each line of the text hilight will be this color, and the top color will be textSelectionColor
 
