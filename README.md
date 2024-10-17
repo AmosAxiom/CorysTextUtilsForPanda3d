@@ -19,7 +19,7 @@ Probably the class you're really here for, contained within the DirectGUISelecta
 
 This class acts just like a DirectEntry- but panda is directed to keep track of events and selection indices and render a text selection hilight over the text.
 
-Note if you don't want this to act like a regular DirectEntry- you MUST PASS
+**Note if you don't want this to act like a regular DirectEntry- you MUST PASS the following**
 ```
 selectable= True
 ```
@@ -30,12 +30,30 @@ Useful kwargs parameters to know:
 * textSelectionColor - The color of the text selection hilight as a 4-tuple. I would recommend a transparency between 0.3 and 0.7.
 * textSelectionColorGrad - If this is defined- the bottom of each line of the text hilight will be this color, and the top color will be textSelectionColor
 
+Additionally- If you have multiple DirectEntrySelectables and DirectLabelSelectables in a GUI and want to call the methods of the one in focus- note that during construction the DirectEntrySelectable adds a python tag to the underlying PGEntry called 'textSelectionHandleObj'.
+
+The static method
+```
+PGItem.getFocusItem()
+```
+will return the PGEntry, and you can access the DirectEntrySelectable by calling
+
+```
+PGItem.getFocusItem().getPythonTag('textSelectionHandleObj')
+```
+
+Check out the CorysCopyPasteHandler.py file for an example of how I implemented this to handle copy-paste events.
+
 ## DirectLabelSelectable
 A version of directlabel which allows text selection- in case you want to display text you want to allow the user to hilight and copy from.
 
 Useful kwargs parameters to know:
 * textSelectionColor - The color of the text selection hilight as a 4-tuple. I would recommend a transparency between 0.3 and 0.7.
 * textSelectionColorGrad - If this is defined- the bottom of each line of the text hilight will be this color, and the top color will be textSelectionColor
+
+This class also tags the underlying PGItem with a python tag 'textSelectionHandleObj' as DirectEntrySelectable does.
+
+It is NOT recommended to access the underlying guiItem directly for DirectLabelSelectable- the guiItem is actually a PGEntry to ensure keyboard focus is handled sensibly, but it is NOT used to render text the same way most PGEntrys are.
 
 ## SelectableExample and CorysCopyPasteHandler
 
