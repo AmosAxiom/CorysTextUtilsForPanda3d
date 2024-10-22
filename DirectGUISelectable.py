@@ -472,9 +472,6 @@ class DirectEntrySelectable(DirectFrame):
 		selend = self.__textSelectionEnd
 
 		paredinserttext = self.pareRestrictedCharacters(texttoinsert)
-		print(paredinserttext)
-		print(self['restrictedCharacters'])
-		print(self['restrictedCharacters'][0] in paredinserttext)
 
 		if self.__textSelectionEnd < self.__textSelectionStart:
 			selbegin = self.__textSelectionEnd
