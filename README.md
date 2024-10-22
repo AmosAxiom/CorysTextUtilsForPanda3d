@@ -29,6 +29,8 @@ Useful kwargs parameters to know:
 * selectable - Setting selectable=True will make this DirectEntrySelectable render a selection box and behave sensibly with selected text.
 * textSelectionColor - The color of the text selection hilight as a 4-tuple. I would recommend a transparency between 0.3 and 0.7.
 * textSelectionColorGrad - If this is defined- the bottom of each line of the text hilight will be this color, and the top color will be textSelectionColor
+* allowControlCharacters - Defaults to TRUE- allowing the user to paste newlines, tabs, and other control characters. Set to False if you'd like to disallow this behavior
+* restrictedCharacters - a string of various other characters you'd like to restrict the user from typing into this field.
 
 Additionally- If you have multiple DirectEntrySelectables and DirectLabelSelectables in a GUI and want to call the methods of the one in focus- note that during construction the DirectEntrySelectable adds a python tag to the underlying PGEntry called 'textSelectionHandleObj'.
 
