@@ -95,6 +95,8 @@ class DirectEntrySelectable(DirectFrame):
 			('autoCapitalizeAllowPrefixes', DirectEntrySelectable.AllowCapNamePrefixes, None),
 			('autoCapitalizeForcePrefixes', DirectEntrySelectable.ForceCapNamePrefixes, None),
 			('selectable',		False,				None),
+			('restrictedCharacters', '', None),
+			('allowControlCharacters', True, None),
 			('textSelectionColor', (0,0,0,0.4),    self.setTextSelectionColor),
 			('textSelectionColorGrad', None, self.setTextSelectionColor),
 			)
@@ -371,6 +373,51 @@ class DirectEntrySelectable(DirectFrame):
 				currgeom.addPrimitive(currprimitive)
 				self.__textHilightNodePath.show()
 
+	def pareRestrictedCharacters(self, inputText=None):
+		if inputText:
+			if self['restrictedCharacters'] == '' or self['restrictedCharacters'] == []:
+				if self['allowControlCharacters']:
+					return inputText
+				else:
+					return TFU.removeControlCharacters(inputText)
+			else:
+				retval = inputText
+
+				for restrictedchar in self['restrictedCharacters']:
+					retval = retval.replace(restrictedchar, '')
+
+				if self['allowControlCharacters']:
+					return retval
+				else:
+					return TFU.removeControlCharacters(inputText)
+		else:
+			if self['restrictedCharacters'] != '' and self['restrictedCharacters'] != []:
+				initialtext = self.guiItem.getWText()
+				if not self['allowControlCharacters']:
+					initialtext = TFU.removeControlCharacters()
+
+				restrictedcharspresent = False
+				for restrictedchar in self['restrictedCharacters']:
+					if restrictedchar in initialtext:
+						restrictedcharspresent = True
+
+				if restrictedcharspresent:
+					newcursorpos = self.guiItem.getCursorPosition()
+
+					cursorformattedindex = TFU.plaintextIndexToFormatIndex(initialtext, newcursorpos)
+
+					precursortext = initialtext[:cursorformattedindex]
+					postcursortext = initialtext[cursorformattedindex:]
+
+					for restrictedchar in self['restrictedCharacters']:
+						precursortext = precursortext.replace(restrictedchar, '')
+						postcursortext = postcursortext.replace(restrictedchar, '')
+
+					self.guiItem.setWtext(precursortext+postcursortext)
+					self.guiItem.setCursorPosition(len(TFU.toPlainText(precursortext)))
+					self.__updateTextStats()
+
+
 	# Takes either a tuple containing (start, end) or start, end as two separate arguments.
 	def setTextSelection(self, *args):
 		start=0
@@ -418,10 +465,16 @@ class DirectEntrySelectable(DirectFrame):
 		self.set(TFU.formatPresRemove(self.get(), selbegin, selend))
 		self.guiItem.setCursorPosition(selbegin)
 		self.remove_selection()
+		messenger.send(self.guiItem.getEraseEvent())
 
 	def insertTextAtCursor(self, texttoinsert):
 		selbegin = self.__textSelectionStart
 		selend = self.__textSelectionEnd
+
+		paredinserttext = self.pareRestrictedCharacters(texttoinsert)
+		print(paredinserttext)
+		print(self['restrictedCharacters'])
+		print(self['restrictedCharacters'][0] in paredinserttext)
 
 		if self.__textSelectionEnd < self.__textSelectionStart:
 			selbegin = self.__textSelectionEnd
@@ -429,14 +482,15 @@ class DirectEntrySelectable(DirectFrame):
 
 		newtext =''
 		if selbegin == selend:
-			newtext = TFU.formatPresInsert(self.get(), texttoinsert, selbegin)
+			newtext = TFU.formatPresInsert(self.get(), paredinserttext, selbegin)
 		else:
-			newtext = TFU.formatPresInsert(TFU.formatPresRemove(self.get(), selbegin, selend), texttoinsert, selbegin)
+			newtext = TFU.formatPresInsert(TFU.formatPresRemove(self.get(), selbegin, selend), paredinserttext, selbegin)
 
 		self.remove_selection()
 		self.set(newtext)
-		self.guiItem.setCursorPosition(selbegin+ len(TFU.toPlainText(texttoinsert)) )
-		self.__updateTextStats()
+		self.__selectingText = False
+		self.guiItem.setCursorPosition(selbegin+ len(TFU.toPlainText(paredinserttext)) )
+		messenger.send(self.guiItem.getTypeEvent())
 
 	def __initCursorFollowMouse(self, *args):
 		#print('started following mouse')
@@ -609,9 +663,9 @@ class DirectEntrySelectable(DirectFrame):
 			self.accept(self.guiItem.getCursormoveEvent(), self.__updateTextSelection)
 			self.__updateTextStats()
 
-	def _handleTyping(self, guiEvent):
-		if self.__prevText != self.guiItem.getText(): 
-			currtext = self.guiItem.getText()
+	def _handleTyping(self, guiEvent=None):
+		if self.__prevText != self.guiItem.getWtext(): 
+			currtext = self.guiItem.getWtext()
 			if self.__textSelectionStart < self.__textSelectionEnd:
 				self.guiItem.setText(TFU.formatPresRemove(currtext, self.__textSelectionStart, self.__textSelectionEnd))
 				self.guiItem.setCursorPosition(self.__textSelectionStart+1)
@@ -625,25 +679,28 @@ class DirectEntrySelectable(DirectFrame):
 				self._autoCapitalize()
 
 			self.__selectingText = False
-		self.__prevText = self.guiItem.getText()
+
+
+		self.__prevText = self.guiItem.getWtext()
 		self.__updateTextStats()
 
-	def _handleErasing(self, guiEvent):
+	def _handleErasing(self, guiEvent=None):
 		if self.__textSelectionStart != self.__textSelectionEnd:
 
-			self.guiItem.setText(TFU.formatPresRemove(self.__prevText,self.__textSelectionStart,self.__textSelectionEnd))
+			self.set(TFU.formatPresRemove(self.__prevText,self.__textSelectionStart,self.__textSelectionEnd))
 			if self.__textSelectionEnd < self.__textSelectionStart:
 				self.guiItem.setCursorPosition(self.__textSelectionEnd)
 			else:
 				self.guiItem.setCursorPosition(self.__textSelectionStart)
 			self.remove_selection()
+			messenger.send(self.guiItem.getEraseEvent()) #this will send a duplicate erase event, but since we're modifying the text again it will be important to notify any other listeners.
 
 		if self['autoCapitalize']:
 			self._autoCapitalize()
 
 		self.__selectingText = False
 
-		self.__prevText = self.guiItem.getText()
+		self.__prevText = self.guiItem.getWtext()
 		self.__updateTextStats()
 
 	def _autoCapitalize(self):
@@ -727,23 +784,29 @@ class DirectEntrySelectable(DirectFrame):
 
 		self.remove_selection()
 
-	def set(self, text):
+	def set(self, text, unrestricted=False):
 		""" Changes the text currently showing in the typable region;
 		does not change the current cursor position.  Also see
 		enterText(). """
 
+		newtext = ''
+		if unrestricted:
+			newtext = self.pareRestrictedCharacters(text)
+		else:
+			newtext = text
+
 		if sys.version_info >= (3, 0):
 			assert not isinstance(text, bytes)
 			self.unicodeText = True
-			self.guiItem.setWtext(text)
+			self.guiItem.setWtext(newtext)
 		else:
 			self.unicodeText = isinstance(text, unicode)
 			if self.unicodeText:
-				self.guiItem.setWtext(text)
+				self.guiItem.setWtext(newtext)
 			else:
-				self.guiItem.setText(text)
+				self.guiItem.setText(newtext)
 
-		self.__prevText = self.guiItem.getText()
+		self.__prevText = self.guiItem.getWtext()
 		self.__updateTextStats()
 
 

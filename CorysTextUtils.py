@@ -18,6 +18,7 @@ import math
 
 from panda3d.core import *
 import encodings.utf_8
+import unicodedata
 
 
 #Static utlity function to generate all combinations of an input list but 
@@ -37,6 +38,9 @@ def orderedCombinations(inputList):
 # characters
 class Panda3dTextFormatUtils:
 
+	def removeControlCharacters(inputStr):
+		return ''.join(ch for ch in inputStr if unicodedata.category(ch)[0]!='C')
+
 	# Converts the integer index of a plaintext rendered string (i.e. cursor index in a PGEntry)
 	# into the corresponding index at a formatted string.
 	# Returns -1 if the plaintext index passed is outside the bounds of the formatted string.
@@ -55,6 +59,12 @@ class Panda3dTextFormatUtils:
 				fmatindexsofar += len(formatChunks[ptcind])
 
 		return -1
+
+	# Converts the integer index within the formatted text string to the corresponding index
+	# at a rendered plaintext string (i.e. to find out what the corresponding cursor index in
+	# a PGEntry is)
+	def formattedIndextoPlaintextIndex(inputStr, formattedIndex):
+		return len( Panda3dTextFormatUtils.toPlainText(inputStr[:formattedIndex]) )
 
 
 	# provide this function with a list of formatting strings
