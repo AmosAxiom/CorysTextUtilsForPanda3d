@@ -38,8 +38,8 @@ def orderedCombinations(inputList):
 # characters
 class Panda3dTextFormatUtils:
 
-	def removeControlCharacters(inputStr):
-		return ''.join(ch for ch in inputStr if unicodedata.category(ch)[0]!='C')
+	def removeControlCharacters(inputStr, replacementChar=''):
+		return ''.join(ch if unicodedata.category(ch)[0]!='C' else replacementChar for ch in inputStr)
 
 	# Converts the integer index of a plaintext rendered string (i.e. cursor index in a PGEntry)
 	# into the corresponding index at a formatted string.
@@ -616,6 +616,8 @@ class TextMapper:
 		return self.textAssembler.calcIndex(targetRow, self.closestHorizCol(newrow, newcol, targetRow))
 
 	def pageIndex(self, index, pageUp=True, numRows=8):
+		if self.numRows == 0:
+			return 0
 		if numRows == 0:
 			return index
 
